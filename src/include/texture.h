@@ -108,7 +108,8 @@ public:
         MipModeNoMIP,        ///< Just use highest-res image, no MIP mapping
         MipModeOneLevel,     ///< Use just one mipmap level
         MipModeTrilinear,    ///< Use two MIPmap levels (trilinear)
-        MipModeAniso         ///< Use two MIPmap levels w/ anisotropic
+        MipModeAniso,        ///< Use two MIPmap levels w/ anisotropic
+        MipModeEWA           ///< Use an elliptical weighted average filter
     };
 
     /// Interp mode determines how we sample within a mipmap level

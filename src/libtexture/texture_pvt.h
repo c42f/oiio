@@ -331,7 +331,15 @@ private:
                          float _dsdx, float _dtdx,
                          float _dsdy, float _dtdy,
                          float *result);
-    
+
+    bool texture_lookup_ewa (TextureFile &texfile,
+                         PerThreadInfo *thread_info,
+                         TextureOpt &options,
+                         float _s, float _t,
+                         float _dsdx, float _dtdx,
+                         float _dsdy, float _dtdy,
+                         float *result);
+
     typedef bool (TextureSystemImpl::*accum_prototype)
                               (float s, float t, int level,
                                TextureFile &texturefile,

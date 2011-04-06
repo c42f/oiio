@@ -561,7 +561,8 @@ TextureSystemImpl::texture (TextureHandle *texture_handle_,
         &TextureSystemImpl::texture_lookup_nomip,
         &TextureSystemImpl::texture_lookup_trilinear_mipmap,
         &TextureSystemImpl::texture_lookup_trilinear_mipmap,
-        &TextureSystemImpl::texture_lookup
+        &TextureSystemImpl::texture_lookup,
+        &TextureSystemImpl::texture_lookup_ewa,
     };
     texture_lookup_prototype lookup = lookup_functions[(int)options.mipmode];
 
@@ -980,6 +981,20 @@ TextureSystemImpl::texture_lookup (TextureFile &texturefile,
     stats.cubic_interps += bicubicprobes * nsamples;
 
     return ok;
+}
+
+
+
+bool
+TextureSystemImpl::texture_lookup_ewa (TextureFile &texturefile,
+                            PerThreadInfo *thread_info,
+                            TextureOpt &options,
+                            float s, float t,
+                            float dsdx, float dtdx,
+                            float dsdy, float dtdy,
+                            float *result)
+{
+    return true;
 }
 
 
