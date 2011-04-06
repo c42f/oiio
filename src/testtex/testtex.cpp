@@ -58,9 +58,11 @@ static bool verbose = false;
 static int output_xres = 512, output_yres = 512;
 static float blur = 0;
 static float width = 1;
+static float maxaniso = 20;
 static int iters = 1;
 static int autotile = 0;
 static bool automip = false;
+static std::string mipmode = "Aniso";
 static bool test_construction = false;
 static TextureSystem *texsys = NULL;
 static std::string searchpath;
@@ -89,6 +91,21 @@ parse_files (int argc, const char *argv[])
 
 
 
+static TextureOpt::MipMode parse_mipmode (const std::string& modestring)
+{
+    if (modestring == "NoMIP")     return TextureOpt::MipModeNoMIP;
+    if (modestring == "OneLevel")  return TextureOpt::MipModeOneLevel;
+    if (modestring == "Trilinear") return TextureOpt::MipModeTrilinear;
+    if (modestring == "Aniso")     return TextureOpt::MipModeAniso;
+    if (modestring == "EWA")       return TextureOpt::MipModeEWA;
+
+    std::cerr << "testtex: Unkown mipmode \"" << modestring
+              << "\", using default\n";
+    return TextureOpt::MipModeDefault;
+}
+
+
+
 static void
 getargs (int argc, const char *argv[])
 {
@@ -105,10 +122,12 @@ getargs (int argc, const char *argv[])
                       "Iterations for time trials",
                   "--blur %f", &blur, "Add blur to texture lookup",
                   "--width %f", &width, "Multiply filter width of texture lookup",
+                  "--maxaniso %f", &maxaniso, "Maximum allowed anisotropic filter ratio",
                   "--missing %f %f %f", &missing[0], &missing[1], &missing[2],
                         "Specify missing texture color",
                   "--autotile %d", &autotile, "Set auto-tile size for the image cache",
                   "--automip", &automip, "Set auto-MIPmap for the image cache",
+                  "--mipmode %s", &mipmode, "Specify the filtering mode to use",
                   "--blocksize %d", &blocksize, "Set blocksize (n x n) for batches",
                   "--handle", &use_handle, "Use texture handle rather than name lookup",
                   "--searchpath %s", &searchpath, "Search path for files",
@@ -219,33 +238,21 @@ test_plain_texture ()
     Imath::M33f xform = scale * rot * trans;
     xform.invert();
 
-    TextureOptions opt;
-    opt.sblur = blur;
-    opt.tblur = blur;
-    opt.swidth = width;
-    opt.twidth = width;
-    opt.nchannels = nchannels;
-    float fill = 1;
-    opt.fill = fill;
-    if (missing[0] >= 0)
-        opt.missingcolor.init ((float *)&missing, 0);
-//    opt.interpmode = TextureOptions::InterpSmartBicubic;
-//    opt.mipmode = TextureOptions::MipModeAniso;
-    opt.swrap = opt.twrap = TextureOptions::WrapPeriodic;
-//    opt.twrap = TextureOptions::WrapBlack;
-
-#if 1
     TextureOpt opt1;
     opt1.sblur = blur;
     opt1.tblur = blur;
     opt1.swidth = width;
     opt1.twidth = width;
+    opt1.anisotropic = maxaniso;
     opt1.nchannels = nchannels;
-    opt1.fill = fill;
+    opt1.fill = 1;
     if (missing[0] >= 0)
         opt1.missingcolor = (float *)&missing;
+    opt1.mipmode = parse_mipmode(mipmode);
     opt1.swrap = opt1.twrap = TextureOpt::WrapPeriodic;
-#endif
+
+    TextureOptions opt(opt1);
+
 
     int shadepoints = blocksize*blocksize;
     float *s = ALLOCA (float, shadepoints);
