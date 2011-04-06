@@ -95,13 +95,16 @@ class EwaFilter
         /// Get the extent of the filter in integer raster coordinates.
         FilterSupport support() const;
 
+        /// Translate centre of filter in the image plane.
+        void translate(Imath::V2f trans);
+
     private:
         /// Quadratic form matrix
-        const Matrix2D m_quadForm;
+        Matrix2D m_quadForm;
         /// Center point of the gaussian filter function
-        const Imath::V2f m_filterCenter;
+        Imath::V2f m_filterCenter;
         /// The log of the filter weight at the filter edge cutoff.
-        const float m_logEdgeWeight;
+        float m_logEdgeWeight;
 };
 
 //------------------------------------------------------------------------------
@@ -425,6 +428,11 @@ inline FilterSupport EwaFilter::support() const
             Imath::ceil(m_filterCenter.y-tRad),     // startY
             Imath::floor(m_filterCenter.y+tRad)+1   // endY
         );
+}
+
+inline void EwaFilter::translate(Imath::V2f trans)
+{
+    m_filterCenter += trans;
 }
 
 }

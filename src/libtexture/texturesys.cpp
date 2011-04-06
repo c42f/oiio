@@ -986,28 +986,23 @@ TextureSystemImpl::texture_lookup (TextureFile &texturefile,
 
 
 template<typename T>
-bool TextureSystemImpl::filter_level_ewa (TextureFile &texturefile,
-                                          PerThreadInfo *thread_info,
-                                          TextureOpt &options,
-                                          int miplevel,
-                                          const EwaFilter& filter,
-                                          float *result)
+bool TextureSystemImpl::filter_level_ewa_nowrap (TextureFile &texturefile,
+                                                 PerThreadInfo *thread_info,
+                                                 TextureOpt &options,
+                                                 int miplevel,
+                                                 const EwaFilter& filter,
+                                                 const FilterSupport& support,
+                                                 float& wtot, float *result)
 {
-    // Initialize result to zeros.
-    for (int c = 0;  c < options.actualchannels;  ++c)
-        result[c] = 0;
-
     const ImageCacheFile::SubimageInfo &subinfo (texturefile.subimageinfo(options.subimage));
     const ImageSpec& spec = subinfo.spec(miplevel);
     int nchannels = spec.nchannels;
 
     // FIXME: Check image top-left offsets & support alignment
-    FilterSupport supp = filter.support();
-    // FIXME: Deal with wrap modes!
-    int xbegin = Imath::clamp (supp.sx.start, 0, spec.width-1);
-    int xend = Imath::clamp (supp.sx.end, 0, spec.width-1);
-    int ybegin = Imath::clamp (supp.sy.start, 0, spec.height-1);
-    int yend = Imath::clamp (supp.sy.end, 0, spec.height-1);
+    int xbegin = Imath::clamp (support.sx.start, 0, spec.width-1);
+    int xend = Imath::clamp (support.sx.end, 0, spec.width-1);
+    int ybegin = Imath::clamp (support.sy.start, 0, spec.height-1);
+    int yend = Imath::clamp (support.sy.end, 0, spec.height-1);
 
     int tile_width = spec.tile_width;
     int tile_height = spec.tile_height;
@@ -1015,18 +1010,18 @@ bool TextureSystemImpl::filter_level_ewa (TextureFile &texturefile,
     int tile_xbegin = (xbegin/tile_width)*tile_width;
     int tile_ybegin = (ybegin/tile_height)*tile_height;
 
-    float wtot = 0;
+    // Iterate over all tiles which intersect the filter support
     for (int tiley = tile_ybegin; tiley < yend; tiley += tile_height) {
         for (int tilex = tile_xbegin; tilex < xend; tilex += tile_width) {
             // Grab the tile data for the current tile.
             TileID id (texturefile, options.subimage, miplevel,
                        tilex, tiley, 0);
             if (!m_imagecache->find_tile (id, thread_info))
+                // TODO: Error reporting.
                 continue;
             const T* data = reinterpret_cast<const T*> (
                             thread_info->tile->bytedata());
-            // Compute the part of the current tile that we should iterate
-            // over.
+            // Intersect the filter & tile support areas
             int xb = std::max (tilex, xbegin);
             int xe = std::min (tilex + tile_width, xend);
             int yb = std::max (tiley, ybegin);
@@ -1035,6 +1030,7 @@ bool TextureSystemImpl::filter_level_ewa (TextureFile &texturefile,
             int rowstride = tile_width*nchannels;
             data += (yb - tiley)*rowstride + (xb - tilex)*nchannels
                     + options.firstchannel;
+            // Iterate over relevant portion of the current tile
             for (int y = yb; y < ye; ++y) {
                 const T* d = data;
                 for (int x = xb; x < xe; ++x) {
@@ -1051,16 +1047,150 @@ bool TextureSystemImpl::filter_level_ewa (TextureFile &texturefile,
         }
     }
 
-    if (wtot != 0)
+    return true; // FIXME
+}
+
+template<typename T>
+bool TextureSystemImpl::filter_level_ewa_wrap (
+                  TextureFile &texturefile, PerThreadInfo *thread_info,
+                  TextureOpt &options, int miplevel, int tlX, int tlY,
+                  const EwaFilter& filter, const FilterSupport& support, float& wtot,
+                  float *result)
+{
+    const ImageCacheFile::SubimageInfo &subinfo (texturefile.subimageinfo(options.subimage));
+    const ImageSpec& spec = subinfo.spec(miplevel);
+    bool wrapX = tlX != 0;
+    bool wrapY = tlY != 0;
+    // Construct the support of the current buffer tile.
+    FilterSupport currSupp = intersect(support, FilterSupport(
+                tlX, tlX + spec.width, tlY, tlY + spec.height));
+    // Select one of the possible wrap modes / wrapping combinations.
+    if (   (options.swrap == TextureOpt::WrapBlack && wrapX)
+        || (options.twrap == TextureOpt::WrapBlack && wrapY) )
     {
-        // Renormalize using the total filter weight
-        float renorm = 1/wtot;
-        if (std::numeric_limits<T>::is_integer)
-            renorm /= std::numeric_limits<T>::max();
-        for (int c = 0;  c < options.actualchannels;  ++c)
-            result[c] *= renorm;
+        // If the tile is in a black wrapmode region, accumulate black
+        // samples, which really amounts to incrementing the total weight.
+        for (int y = currSupp.sy.start; y < currSupp.sy.end; ++y)
+            for (int x = currSupp.sx.start; x < currSupp.sx.end; ++x)
+                wtot += filter(x,y);
     }
-    return true;
+#if 0
+    else if(wrapModes.sWrap == WrapMode_Clamp && wrapX)
+    {
+        if(wrapModes.tWrap == WrapMode_Clamp && wrapY)
+        {
+            // Both directions are clamped.  This requires accumulation of
+            // a single corner pixel over the support.
+            int xClamp = clamp(tlX, 0, spec.width-1);
+            int yClamp = clamp(tlY, 0, spec.height-1);
+            // sampVec is the samples for the corner pixel to be accumulated.
+            typename ArrayT::TqSampleVector sampVec = *buffer.begin(FilterSupport(
+                        xClamp, xClamp+1, yClamp, yClamp+1));
+            for(int ix = currSupp.sx.start; ix < currSupp.sx.end; ++ix)
+                for(int iy = currSupp.sy.start; iy < currSupp.sy.end; ++iy)
+                    sampleAccum.accumulate(ix, iy, sampVec);
+        }
+        else
+        {
+            // clamped in x direction, but not in y direction.
+            // Here we perform a normal iteration over y, but leave 
+            int xClamp = clamp(tlX, 0, spec.width-1);
+            FilterSupport clampedSupport(FilterSupport1D(xClamp, xClamp+1), currSupp.sy);
+            for(typename ArrayT::TqIterator i = buffer.begin(clampedSupport);
+                    i.inSupport(); ++i)
+            {
+                for(int ix = currSupp.sx.start; ix < currSupp.sx.end; ++ix)
+                    sampleAccum.accumulate(ix, i.y(), *i);
+            }
+        }
+    }
+    else if(wrapModes.tWrap == WrapMode_Clamp && wrapY)
+    {
+        // clamped in y direction, but not in x direction.  This is just an
+        // inverted (and slightly duplicated :-/ ) version of the code above
+        int yClamp = clamp(tlY, 0, spec.height-1);
+        FilterSupport clampedSupport(currSupp.sx, FilterSupport1D(yClamp, yClamp+1));
+        for(typename ArrayT::TqIterator i = buffer.begin(clampedSupport);
+                i.inSupport(); ++i)
+        {
+            for(int iy = currSupp.sy.start; iy < currSupp.sy.end; ++iy)
+                sampleAccum.accumulate(i.x(), iy, *i);
+        }
+    }
+#endif
+    else
+    {
+        // Either no wrapping or periodic wrapping in one direction.
+        FilterSupport wrappedSupport(
+                currSupp.sx.start - tlX, currSupp.sx.end - tlX,
+                currSupp.sy.start - tlY, currSupp.sy.end - tlY);
+        EwaFilter wrapFilt(filter);
+        wrapFilt.translate (-Imath::V2f (tlX, tlY));
+        filter_level_ewa_nowrap<T> (texturefile, thread_info, options,
+                                    miplevel, wrapFilt, wrappedSupport,
+                                    wtot, result);
+    }
+    return true; //FIXME
+}
+
+
+template<typename T>
+bool TextureSystemImpl::filter_level_ewa (TextureFile &texturefile,
+                                          PerThreadInfo *thread_info,
+                                          TextureOpt &options, int miplevel,
+                                          const EwaFilter& filter,
+                                          float& wtot, float *result)
+{
+    const ImageCacheFile::SubimageInfo &subinfo (texturefile.subimageinfo(options.subimage));
+    const ImageSpec& spec = subinfo.spec(miplevel);
+
+    FilterSupport support = filter.support();
+    if(miplevel == (int)subinfo.levels.size() - 1) {
+        if (   (options.swrap == TextureOpt::WrapBlack)
+            || (options.twrap == TextureOpt::WrapBlack) ) {
+            // Truncate the support to a maximum size of 20x20 if we're on the
+            // highest mipmap level.  If we don't do this, the support can
+            // occasionally be very large, resulting in very long filter times.
+            int cx = (support.sx.start + support.sx.end)/2;
+            int cy = (support.sy.start + support.sy.end)/2;
+            support = intersect(support, FilterSupport(cx-10, cx+11,
+                                                       cy-10, cy+11));
+        } else {
+            // For periodic & clamp wrapmodes, we need no filtering on the
+            // highest miplevel, so just extract the pixel value.
+            TileID id (texturefile, options.subimage, miplevel, 0, 0, 0);
+            if (!m_imagecache->find_tile (id, thread_info)) {
+                return false;
+            } else {
+                const T* data = reinterpret_cast<const T*> (
+                                thread_info->tile->bytedata())
+                                + options.firstchannel;;
+                wtot = std::numeric_limits<T>::max();
+                for (int c = 0; c < options.actualchannels; ++c)
+                    result[c] = data[c];
+                return true;
+            }
+        }
+    }
+
+    // Tile the texture onto the plane, and iterate over all tiles which
+    // are touched by the filter support.  Note that this "tiling" is for
+    // texture wrapping (it has nothing to do with the underlying tiled
+    // texture storage).
+    int x0 = Imath::floor(float(support.sx.start)/spec.width) * spec.width;
+    int y0 = Imath::floor(float(support.sy.start)/spec.height) * spec.height;
+    // (tlX, tlY) is the top left corner of the translated texture.
+    for (int tlY = y0; tlY < support.sy.end; tlY += spec.height) {
+        for (int tlX = x0; tlX < support.sx.end; tlX += spec.width) {
+            filter_level_ewa_wrap<T> (texturefile, thread_info, options,
+                                      miplevel, tlX, tlY, filter, support,
+                                      wtot, result);
+        }
+    }
+
+    if (std::numeric_limits<T>::is_integer)
+        wtot *= std::numeric_limits<T>::max();
+    return true; //FIXME
 }
 
 
@@ -1080,9 +1210,6 @@ TextureSystemImpl::texture_lookup_ewa (TextureFile &texturefile,
                           Imath::V2f (dsdx, dtdx),
                           Imath::V2f (dsdy, dtdy));
     region.scaleWidth (options.swidth, options.twidth);
-    // Remap the region onto the main part of the texture if periodic.
-    region.remapPeriodic (options.swrap == TextureOpt::WrapPeriodic,
-                          options.twrap == TextureOpt::WrapPeriodic);
 
     float sblur = options.sblur;
     float tblur = options.tblur;
@@ -1120,6 +1247,11 @@ TextureSystemImpl::texture_lookup_ewa (TextureFile &texturefile,
     }
 #endif
     float levelCts = log2 (filterFactory.minorAxisWidth() / minFilterWidth);
+//
+//    for(int i = 0; i < texturefile.subimages(); ++i)
+//    {
+//        float filtwidth_ras = texturefile.spec(i).full_width * filtwidth;
+//    }
     int miplevel = Imath::clamp (Imath::floor(levelCts), 0,
                                  (int)subinfo.levels.size() - 1);
 
@@ -1129,15 +1261,27 @@ TextureSystemImpl::texture_lookup_ewa (TextureFile &texturefile,
     float offset = -0.5*((1 << miplevel) - 1);
     float scale = 1.0/(1 << miplevel);
 
+    // Initialize result to zeros.
+    for (int c = 0;  c < options.actualchannels;  ++c)
+        result[c] = 0;
+
+    float wtot = 0;
     // Now perform the filtering.
     EwaFilter filtker = filterFactory.createFilter (scale, offset,
                                                     scale, offset);
     if (texturefile.eightbit()) {
         filter_level_ewa<unsigned char> (texturefile, thread_info, options,
-                                         miplevel, filtker, result);
+                                         miplevel, filtker, wtot, result);
     } else {
         filter_level_ewa<float> (texturefile, thread_info, options,
-                                 miplevel, filtker, result);
+                                 miplevel, filtker, wtot, result);
+    }
+
+    if(wtot != 0) {
+        // Renormalize using the total filter weight
+        float renorm = 1/wtot;
+        for (int c = 0;  c < options.actualchannels;  ++c)
+            result[c] *= renorm;
     }
 
     // FIXME CJF: Enable filtering across multiple mipmap levels!
