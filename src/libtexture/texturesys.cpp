@@ -54,6 +54,7 @@ using namespace std::tr1;
 #include "imagecache.h"
 #include "imagecache_pvt.h"
 #include "texture_pvt.h"
+#include "ewafilter.h"
 
 OIIO_NAMESPACE_ENTER
 {
@@ -984,6 +985,84 @@ TextureSystemImpl::texture_lookup (TextureFile &texturefile,
 }
 
 
+template<typename T>
+bool TextureSystemImpl::filter_level_ewa (TextureFile &texturefile,
+                                          PerThreadInfo *thread_info,
+                                          TextureOpt &options,
+                                          int miplevel,
+                                          const EwaFilter& filter,
+                                          float *result)
+{
+    // Initialize result to zeros.
+    for (int c = 0;  c < options.actualchannels;  ++c)
+        result[c] = 0;
+
+    const ImageCacheFile::SubimageInfo &subinfo (texturefile.subimageinfo(options.subimage));
+    const ImageSpec& spec = subinfo.spec(miplevel);
+    int nchannels = spec.nchannels;
+
+    // FIXME: Check image top-left offsets & support alignment
+    FilterSupport supp = filter.support();
+    // FIXME: Deal with wrap modes!
+    int xbegin = Imath::clamp (supp.sx.start, 0, spec.width-1);
+    int xend = Imath::clamp (supp.sx.end, 0, spec.width-1);
+    int ybegin = Imath::clamp (supp.sy.start, 0, spec.height-1);
+    int yend = Imath::clamp (supp.sy.end, 0, spec.height-1);
+
+    int tile_width = spec.tile_width;
+    int tile_height = spec.tile_height;
+
+    int tile_xbegin = (xbegin/tile_width)*tile_width;
+    int tile_ybegin = (ybegin/tile_height)*tile_height;
+
+    float wtot = 0;
+    for (int tiley = tile_ybegin; tiley < yend; tiley += tile_height) {
+        for (int tilex = tile_xbegin; tilex < xend; tilex += tile_width) {
+            // Grab the tile data for the current tile.
+            TileID id (texturefile, options.subimage, miplevel,
+                       tilex, tiley, 0);
+            if (!m_imagecache->find_tile (id, thread_info))
+                continue;
+            const T* data = reinterpret_cast<const T*> (
+                            thread_info->tile->bytedata());
+            // Compute the part of the current tile that we should iterate
+            // over.
+            int xb = std::max (tilex, xbegin);
+            int xe = std::min (tilex + tile_width, xend);
+            int yb = std::max (tiley, ybegin);
+            int ye = std::min (tiley + tile_height, yend);
+            // Increment to start of data
+            int rowstride = tile_width*nchannels;
+            data += (yb - tiley)*rowstride + (xb - tilex)*nchannels
+                    + options.firstchannel;
+            for (int y = yb; y < ye; ++y) {
+                const T* d = data;
+                for (int x = xb; x < xe; ++x) {
+                    float w = filter(x,y);
+                    if (w != 0) {
+                        wtot += w;
+                        for (int c = 0; c < options.actualchannels; ++c)
+                            result[c] += w*d[c];
+                    }
+                    d += nchannels;
+                }
+                data += rowstride;
+            }
+        }
+    }
+
+    if (wtot != 0)
+    {
+        // Renormalize using the total filter weight
+        float renorm = 1/wtot;
+        if (std::numeric_limits<T>::is_integer)
+            renorm /= std::numeric_limits<T>::max();
+        for (int c = 0;  c < options.actualchannels;  ++c)
+            result[c] *= renorm;
+    }
+    return true;
+}
+
 
 bool
 TextureSystemImpl::texture_lookup_ewa (TextureFile &texturefile,
@@ -994,7 +1073,116 @@ TextureSystemImpl::texture_lookup_ewa (TextureFile &texturefile,
                             float dsdy, float dtdy,
                             float *result)
 {
-    return true;
+    const ImageCacheFile::SubimageInfo &subinfo (texturefile.subimageinfo(options.subimage));
+    const ImageSpec& spec = subinfo.spec(0);
+
+    SamplePllgram region (Imath::V2f (s,t),
+                          Imath::V2f (dsdx, dtdx),
+                          Imath::V2f (dsdy, dtdy));
+    region.scaleWidth (options.swidth, options.twidth);
+    // Remap the region onto the main part of the texture if periodic.
+    region.remapPeriodic (options.swrap == TextureOpt::WrapPeriodic,
+                          options.twrap == TextureOpt::WrapPeriodic);
+
+    float sblur = options.sblur;
+    float tblur = options.tblur;
+    // Create filter factory which is capable of making EWA filters
+    // corresponding to various mipmap levels.
+    EwaFilterFactory filterFactory (region, spec.width, spec.height,
+                                    ewaBlurMatrix (sblur, tblur),
+                                    3, options.anisotropic);
+
+    // Select mipmap level to use.
+    //
+    // The minimum filter width is the minimum number of pixels over which the
+    // shortest length scale of the filter should extend.
+    float minFilterWidth = 2; // options.minwidth;  TODO, can be settable!
+
+    // FIXME CJF: 
+#if 0
+    // Blur ratio ranges from 0 at no blur to 1 for a "lot" of blur.
+    float blurRatio = 0;
+    if (sampleOpts.lerp() == Lerp_Auto && (sblur != 0 || tblur != 0))
+    {
+        // When using blur, the minimum filter width needs to be increased.
+        //
+        // Experiments show that for large blur factors minFilterWidth should
+        // be about 4 for good results.
+        float maxBlur = max (sblur*spec.width, tblur*spec.height);
+        // To estimate how much to increase the blur, we take the ratio of the
+        // the blur to the computed width of the minor axis of the filter.
+        // This should be near 0 for blur which doesn't effect the filtering
+        // much, and a asymptote to a positive constant when the blur is the
+        // dominant factor.
+        blurRatio = Imath::clamp(2.0f*maxBlur/filterFactory.minorAxisWidth(),
+                                 0.0f, 1.0f);
+        minFilterWidth += 2*blurRatio;
+    }
+#endif
+    float levelCts = log2 (filterFactory.minorAxisWidth() / minFilterWidth);
+    int miplevel = Imath::clamp (Imath::floor(levelCts), 0,
+                                 (int)subinfo.levels.size() - 1);
+
+    // Offset calculation... FIXME CJF.  The offsets need to be attached to the
+    // file, possibly created on-demand.  The following assumes that the
+    // texture size is power-of-two.
+    float offset = -0.5*((1 << miplevel) - 1);
+    float scale = 1.0/(1 << miplevel);
+
+    // Now perform the filtering.
+    EwaFilter filtker = filterFactory.createFilter (scale, offset,
+                                                    scale, offset);
+    if (texturefile.eightbit()) {
+        filter_level_ewa<unsigned char> (texturefile, thread_info, options,
+                                         miplevel, filtker, result);
+    } else {
+        filter_level_ewa<float> (texturefile, thread_info, options,
+                                 miplevel, filtker, result);
+    }
+
+    // FIXME CJF: Enable filtering across multiple mipmap levels!
+#if 0
+    // Sometimes we might want to interpolate between the filtered result
+    // already computed above and the next lower mipmap level.  We do that now
+    // if necessary.
+    if ( ( sampleOpts.lerp() == Lerp_Always
+        || (sampleOpts.lerp() == Lerp_Auto && blurRatio > 0.2) )
+        && level < numLevels()-1 && levelCts > 0)
+    {
+        // Use interpolation between the results of filtering on two different
+        // mipmap levels.  This should only be necessary if using filter blur,
+        // however the user can also turn it on explicitly using the "lerp"
+        // option.
+        //
+        // Experiments with large amounts of blurring show that some form of
+        // interpolation near level transitions is necessary to ensure that
+        // they're smooth and invisible.
+        //
+        // Such interpolation is mainly necessary when large regions of the
+        // output image arise from filtering over a small part of a high mipmap
+        // level - something which only occurs with artifically large filter
+        // widths such as those arising from lots of blur.
+        //
+        // Since this extra interpolation isn't really needed for small amounts
+        // of blur, we only do the interpolation when the blur ratio is large
+        // enough to make it worthwhile.
+
+        // Filter second level into tmpSamps.
+        float* tmpSamps = ALLOCA(float, sampleOpts.numChannels());
+        filterLevel(level+1, filterFactory, sampleOpts, tmpSamps);
+
+        // Mix result and tmpSamps.
+        float levelInterp = levelCts - level;
+        // We square levelInterp here in order to bias the interpolation toward
+        // the higher resolution mipmap level, since the filtered result on the
+        // higher level is more accurate.
+        levelInterp *= levelInterp;
+        for (int i = 0; i < sampleOpts.numChannels(); ++i)
+            result[i] = (1-levelInterp) * result[i] + levelInterp*tmpSamps[i];
+    }
+#endif
+
+     return true;
 }
 
 

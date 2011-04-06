@@ -48,6 +48,7 @@ set (libOpenImageIO_srcs formatspec.cpp imagebuf.cpp
                           ../libtexture/environment.cpp 
                           ../libtexture/texoptions.cpp 
                           ../libtexture/imagecache.cpp
+                          ../libtexture/ewafilter.cpp
                           ${libOpenImageIO_hdrs}
                          )
 

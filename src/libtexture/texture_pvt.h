@@ -44,6 +44,7 @@ OIIO_NAMESPACE_ENTER
 
 class ImageCache;
 class Filter1D;
+class EwaFilter;
 
 namespace pvt {
 
@@ -331,6 +332,12 @@ private:
                          float _dsdx, float _dtdx,
                          float _dsdy, float _dtdy,
                          float *result);
+
+    template<typename T>
+    bool filter_level_ewa (TextureFile &texturefile,
+                           PerThreadInfo *thread_info,
+                           TextureOpt &options, int miplevel,
+                           const EwaFilter& filter, float *result);
 
     bool texture_lookup_ewa (TextureFile &texfile,
                          PerThreadInfo *thread_info,
