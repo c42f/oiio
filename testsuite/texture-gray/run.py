@@ -13,13 +13,14 @@ sys.path = [".."] + sys.path
 import runtest
 
 # A command to run
-command = path + runtest.oiio_app("testtex") + " --nowarp --offset -1 -1 -1 --scalest 2 2 sparse_half.f3d ; "
-command = command + path + runtest.oiio_app("idiff") + " out.exr ref/out.exr > out.txt"
+command = path + runtest.oiio_app ("testtex") + " -fill 0.05 --graytorgb --res 128 128 --nowarp gray.png ; "
+command = command + path + runtest.oiio_app ("idiff") + " out.exr ref/out.exr > out.txt"
+
 # Outputs to check against references
 outputs = [  ]
 
 # Files that need to be cleaned up, IN ADDITION to outputs
-cleanfiles = [ "out.txt" "out.exr" ]
+cleanfiles = [ "out.txt" "out.exr" "postage.exr" ]
 
 
 # boilerplate
