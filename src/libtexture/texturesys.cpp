@@ -1156,6 +1156,7 @@ TextureSystemImpl::texture_lookup (TextureFile &texturefile,
 }
 
 
+
 template<typename T>
 bool TextureSystemImpl::filter_level_ewa_nowrap (TextureFile &texturefile,
                                                  PerThreadInfo *thread_info,
@@ -1204,7 +1205,11 @@ bool TextureSystemImpl::filter_level_ewa_nowrap (TextureFile &texturefile,
             // Iterate over relevant portion of the current tile
             for (int y = yb; y < ye; ++y) {
                 const T* d = data;
-                for (int x = xb; x < xe; ++x) {
+                // Intersect x-bounding slab with tile x range.
+                int xb2 = std::max (xb, filter.xbegin(y));
+                int xe2 = std::min (xe, filter.xend(y));
+                d += nchannels*(xb2 - xb);
+                for (int x = xb2; x < xe2; ++x) {
                     float w = filter(x,y);
                     if (w != 0) {
                         wtot += w;

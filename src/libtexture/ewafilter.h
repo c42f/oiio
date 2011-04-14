@@ -75,9 +75,12 @@ class EwaFilter
         /// \param quadForm - quadratic form matrix
         /// \param filterCenter - the filter is centered on this point.
         /// \param logEdgeWeight - log of the filter weight at the edge cutoff.
+        /// \param minorAxis - vector in minor axis direction
+        /// \param boundOffset - displacement from center to right bound line
         ///
         EwaFilter(Matrix2D quadForm, Imath::V2f filterCenter,
-                  float logEdgeWeight);
+                  float logEdgeWeight, Imath::V2f minorAxis,
+                  Imath::V2f boundOffset);
 
         /// EWA filters are never pre-noramlized; return false.
         static bool isNormalized() { return false; }
@@ -98,6 +101,38 @@ class EwaFilter
         /// Translate centre of filter in the image plane.
         void translate(Imath::V2f trans);
 
+        /// First x coordinate inside filter at height y.
+        ///
+        /// Diagonally anisotropic filters don't fit well into an axis-aligned
+        /// bounding box as shown here (x's represent nonzero filter values):
+        ///
+        ///   +---------+
+        ///   |      / x|
+        ///   |     / x |
+        ///   |    /xx /|
+        ///   |   /xxx/ |
+        ///   |  /xxx/  |
+        ///   | /xxx/   |
+        ///   |/ xx/    |
+        ///   | x /     |
+        ///   |x /      |
+        ///   +---------+
+        ///
+        /// This means that the filter inside the bounding box provided by
+        /// support() contains a lot of zeros, so it's inefficient to iterate
+        /// over this entire region.  Instead, we can define a bounding slab
+        /// by a pair of parallel lines, and iterate between those instead.
+        /// xbegin() and xend() calculate these lines at a given height y.
+        int xbegin(float y) const
+        {
+            return Imath::ceil(m_leftBound_x0 + m_bound_dxdy*y);
+        }
+        /// One-past-last x coordinate inside filter at height y.
+        int xend(float y) const
+        {
+            return Imath::ceil(m_rightBound_x0 + m_bound_dxdy*y);
+        }
+
     private:
         /// Quadratic form matrix
         Matrix2D m_quadForm;
@@ -105,6 +140,10 @@ class EwaFilter
         Imath::V2f m_filterCenter;
         /// The log of the filter weight at the filter edge cutoff.
         float m_logEdgeWeight;
+        /// Coefficients for bounding slab.
+        float m_bound_dxdy;
+        float m_leftBound_x0;
+        float m_rightBound_x0;
 };
 
 //------------------------------------------------------------------------------
@@ -256,6 +295,8 @@ class EwaFilterFactory
         float m_logEdgeWeight;
         /// Width of the semi-minor axis of the elliptical filter
         float m_minorAxisWidth;
+        /// Direction of minor axis of ellipse.  Always has m_minorAxis.x > 0.
+        Imath::V2f m_minorAxis;
 };
 
 
@@ -312,23 +353,30 @@ inline Matrix2D ewaBlurMatrix(float sBlur, float tBlur)
 inline EwaFilter EwaFilterFactory::createFilter(float xScale, float xOff,
                                                 float yScale, float yOff) const
 {
+    // Displacement from filter center to edge of filter support on minor axis.
+    Imath::V2f offset = 0.5f*m_minorAxisWidth*m_minorAxis;
     // Special case for the first mipmap level.
     if(xScale == 1 && yScale == 1 && xOff == 0 && yOff == 0)
-        return EwaFilter(m_quadForm, m_filterCenter, m_logEdgeWeight);
+        return EwaFilter(m_quadForm, m_filterCenter, m_logEdgeWeight,
+                         m_minorAxis, offset);
     // Generic case - need to do some scaling etc.
     float invXs = 1/xScale;
     float invYs = 1/yScale;
     // The strange-looking matrix which is passed into the EwaFilter
     // constructor below is simply the hand-written version of the following M:
     //
-    // Matrix2D scaleMatrix(1/xScale, 1/yScale);
+    // Matrix2D S(1/xScale, 1/yScale);
     // M = scaleMatrix*m_quadForm*scaleMatrix;
+    //
+    // Note that axes of the ellipse transform like normals.
     return EwaFilter(
             Matrix2D(invXs*invXs*m_quadForm.a, invXs*invYs*m_quadForm.b,
-                invXs*invYs*m_quadForm.c, invYs*invYs*m_quadForm.d),
+                     invXs*invYs*m_quadForm.c, invYs*invYs*m_quadForm.d),
             Imath::V2f(xScale*(m_filterCenter.x + xOff),
-                yScale*(m_filterCenter.y + yOff)),
-            m_logEdgeWeight);
+                       yScale*(m_filterCenter.y + yOff)),
+            m_logEdgeWeight, m_minorAxis*Imath::V2f(invXs, invYs),
+            offset*Imath::V2f(xScale, yScale)
+    );
 }
 
 inline float EwaFilterFactory::minorAxisWidth() const
@@ -394,11 +442,33 @@ extern NegExpTable negExpTable;
 //------------------------------------------------------------------------------
 // EwaFilter implementation
 inline EwaFilter::EwaFilter(Matrix2D quadForm, Imath::V2f filterCenter,
-                            float logEdgeWeight)
+                            float logEdgeWeight, Imath::V2f minorAxis,
+                            Imath::V2f boundOffset)
     : m_quadForm(quadForm),
     m_filterCenter(filterCenter),
     m_logEdgeWeight(logEdgeWeight)
-{ }
+{
+    if(fabs(minorAxis.x) > 0.001*fabs(minorAxis.y))
+    {
+        // slope of bounding lines
+        m_bound_dxdy = -minorAxis.y/minorAxis.x;
+        // p1,p2 = points on left,right bounding lines
+        Imath::V2f p1 = m_filterCenter - boundOffset;
+        Imath::V2f p2 = m_filterCenter + boundOffset;
+        // constant offsets for left and right bounding lines.
+        m_leftBound_x0  = p1.x - m_bound_dxdy*p1.y;
+        m_rightBound_x0 = p2.x - m_bound_dxdy*p2.y;
+    }
+    else
+    {
+        // Special case: bounding slab is basically parallel to the x-axis.  In
+        // this case, give up doing a careful bounding job - the rectangular
+        // filter support will work well.
+        m_bound_dxdy = 0;
+        m_leftBound_x0 = INT_MIN/4;
+        m_rightBound_x0 = INT_MAX/4;
+    }
+}
 
 inline float EwaFilter::operator()(float x, float y) const
 {
@@ -433,6 +503,8 @@ inline FilterSupport EwaFilter::support() const
 inline void EwaFilter::translate(Imath::V2f trans)
 {
     m_filterCenter += trans;
+    m_leftBound_x0  += trans.x - m_bound_dxdy*trans.y;
+    m_rightBound_x0 += trans.x - m_bound_dxdy*trans.y;
 }
 
 }

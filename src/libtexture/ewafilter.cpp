@@ -43,31 +43,46 @@ namespace {
 ///
 /// \param covariance - Covariance matrix for a gaussian filter
 /// \param minorAxisWidth - return the width of the minor ellipse axis in here.
+/// \param minorAxisDirection - return direction of minor axis of ellipse
 /// \param maxAspectRatio - maximum allowable aspect ratio for the filter.
 /// \param logEdgeWeight - log of the filter weight at the filter edge.
 ///
 inline void clampEccentricity(Matrix2D& covariance, float& minorAxisWidth,
-        float maxAspectRatio, float logEdgeWeight)
+                              Imath::V2f& minorAxisDirection,
+                              float maxAspectRatio, float logEdgeWeight)
 {
-    float eig1 = 1;
-    float eig2 = 1;
     // Eigenvalues of the covariance matrix are the squares of the lengths of
     // the semi-major and semi-minor axes of the filter support ellipse.
+    // eigenvalues() guarentees that eig1 >= eig2.
+    float eig1 = 1, eig2 = 1;
     covariance.eigenvalues(eig1, eig2);
-    // eigenvalues() guarentees that eig1 >= eig2, which means we only have to
-    // check one inequality here.
+    Matrix2D R = covariance.orthogDiagonalize(eig1, eig2);
+    // by construction, covariance = R * D * R^T, where
+    // D = Matrix2D(eig1, eig2)
     if(maxAspectRatio*maxAspectRatio*eig2 < eig1)
     {
-        // Need to perform eccentricity clamping
-        Matrix2D R = covariance.orthogDiagonalize(eig1, eig2);
-        // By construction, covariance = R^T * D * R, where
-        // D = Matrix2D(eig1, eig2)
-        //
-        // We modify the diagonal matrix D to replace eig2 with something
-        // larger - the clamped value.
-        eig2 = eig1/(maxAspectRatio*maxAspectRatio);
+        // Clamp eccentricity
+        if(1000000*eig2 < eig1)
+        {
+            // Special case for numerical stability in the case of absolutely
+            // extreme anisotropy: expand minor axis so that it's always
+            // overblurred.
+            eig2 = eig1/(maxAspectRatio*maxAspectRatio);
+        }
+        else
+        {
+            // Normal case: choose a length scale equal to the geometric mean
+            // of lengths, and expand long axis + contract short axis about
+            // this length to get a max anisotropic filter.  This results in
+            // some blurring along the short axis, and some aliasing along the
+            // long axis, but seems like a good compromise.
+            float g = sqrt(eig2*eig1);
+            eig1 = g*maxAspectRatio;
+            eig2 = g/maxAspectRatio;
+        }
         covariance = R * Matrix2D(eig1, eig2) * R.transpose();
     }
+    minorAxisDirection = Imath::V2f(R.b, R.d);
     minorAxisWidth = std::sqrt(8*eig2*logEdgeWeight);
 }
 
@@ -118,8 +133,8 @@ void EwaFilterFactory::computeFilter(const SamplePllgram& samplePllgram,
     // The closure of gaussian filters under convolution provides a very nice
     // way of incorporating extra filter blurring in a systematic way:  We
     // imagine that any blur is an extra filter convoluted with the
-    // reconstructed image.  For gaussian filters this corresponds to adding
-    // covariance matrices.
+    // reconstructed image.  For gaussian filters this convolution corresponds
+    // to adding covariance matrices.
     //
     // Note the brackets around (invJ*invJ.transpose()) are important for
     // numerical stability to ensure symmetry in the result matrix.
@@ -135,7 +150,11 @@ void EwaFilterFactory::computeFilter(const SamplePllgram& samplePllgram,
     coVar += Matrix2D(reconsVar);
 
     // Clamp the eccentricity of the filter.
-    clampEccentricity(coVar, m_minorAxisWidth, maxAspectRatio, m_logEdgeWeight);
+    clampEccentricity(coVar, m_minorAxisWidth, m_minorAxis, maxAspectRatio,
+                      m_logEdgeWeight);
+    // ensure that minor axis x-component is positive.
+    if(m_minorAxis.x < 0)
+        m_minorAxis = -m_minorAxis;
     // Get the quadratic form
     m_quadForm = 0.5*coVar.inv();
 }
