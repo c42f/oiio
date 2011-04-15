@@ -1170,11 +1170,11 @@ bool TextureSystemImpl::filter_level_ewa_nowrap (TextureFile &texturefile,
     const ImageSpec& spec = subinfo.spec(miplevel);
     int nchannels = spec.nchannels;
 
-    // FIXME: Check image top-left offsets & support alignment
-    int xbegin = Imath::clamp (support.sx.start, 0, spec.width-1);
-    int xend = Imath::clamp (support.sx.end, 0, spec.width-1);
-    int ybegin = Imath::clamp (support.sy.start, 0, spec.height-1);
-    int yend = Imath::clamp (support.sy.end, 0, spec.height-1);
+    // Clamp filter support to the extent of the image.
+    int xbegin = Imath::clamp (support.sx.start, 0, spec.width);
+    int xend = Imath::clamp (support.sx.end, 0, spec.width);
+    int ybegin = Imath::clamp (support.sy.start, 0, spec.height);
+    int yend = Imath::clamp (support.sy.end, 0, spec.height);
 
     int tile_width = spec.tile_width;
     int tile_height = spec.tile_height;
