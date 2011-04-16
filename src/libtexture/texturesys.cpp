@@ -1349,7 +1349,7 @@ bool TextureSystemImpl::filter_level_ewa (TextureFile &texturefile,
         }
     }
 
-    // Tile the texture onto the plane, and iterate over all tiles which
+    // Tile the texture onto the plane, and iterate over all tiles that
     // are touched by the filter support.  Note that this "tiling" is for
     // texture wrapping (it has nothing to do with the underlying tiled
     // texture storage).
@@ -1423,19 +1423,10 @@ TextureSystemImpl::texture_lookup_ewa (TextureFile &texturefile,
     }
 #endif
     float levelCts = log2 (filterFactory.minorAxisWidth() / minFilterWidth);
-//
-//    for(int i = 0; i < texturefile.subimages(); ++i)
-//    {
-//        float filtwidth_ras = texturefile.spec(i).full_width * filtwidth;
-//    }
     int miplevel = Imath::clamp (Imath::floor(levelCts), 0,
                                  (int)subinfo.levels.size() - 1);
 
-    // Offset calculation... FIXME CJF.  The offsets need to be attached to the
-    // file, possibly created on-demand.  The following assumes that the
-    // texture size is power-of-two.
-    float offset = -0.5*((1 << miplevel) - 1);
-    float scale = 1.0/(1 << miplevel);
+    // FIXME: Figure out how to handle cropping/overscan!
 
     // Initialize result to zeros.
     for (int c = 0;  c < options.actualchannels;  ++c)
@@ -1443,8 +1434,9 @@ TextureSystemImpl::texture_lookup_ewa (TextureFile &texturefile,
 
     float wtot = 0;
     // Now perform the filtering.
-    EwaFilter filtker = filterFactory.createFilter (scale, offset,
-                                                    scale, offset);
+    EwaFilter filtker = filterFactory.createFilter (
+                                            subinfo.spec (miplevel).width,
+                                            subinfo.spec (miplevel).height );
     if (texturefile.eightbit()) {
         filter_level_ewa<unsigned char> (texturefile, thread_info, options,
                                          miplevel, filtker, wtot, result);

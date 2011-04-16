@@ -243,28 +243,12 @@ class EwaFilterFactory
                          float logEdgeWeight = 3, 
                          float maxAspectRatio = 20);
 
-        /// \brief Create an EWA filter functor.
+        /// \brief Create an EWA filter for a given miplevel
         ///
-        /// Create an EWA filter functor using a transformation relative to the
-        /// base texture coordinates for which the factory coefficients are
-        /// calculated.  This is useful for mipmapping where you'd like to
-        /// create the filter for the base texture, but adjust it for use with
-        /// the raster coordinate system of a higher mipmap level where
-        /// necessary.
+        /// \param width - width of the miplevel
+        /// \param height - height of the miplevel
         ///
-        /// The new raster coordinate system relates to the old one via a scale
-        /// factor and offset.  For example, the new raster x-coordinates are
-        /// given by:
-        ///
-        ///   xNew = xScale*(xOld + xOff).
-        ///
-        /// \param xScale - scale factor for old -> new coords
-        /// \param xOff - offset for old -> new coords
-        /// \param yScale - see xScale
-        /// \param yOff - see xOff
-        ///
-        EwaFilter createFilter(float xScale = 1, float xOff = 0,
-                               float yScale = 1, float yOff = 0) const;
+        EwaFilter createFilter(int width, int height) const;
 
         /// Get the width of the filter along the minor axis of the ellipse
         float minorAxisWidth() const;
@@ -287,6 +271,9 @@ class EwaFilterFactory
                            float baseResT, const Matrix2D& blurVariance,
                            float maxAspectRatio);
 
+        /// Base resolution of the texture
+        int m_baseResS;
+        int m_baseResT;
         /// Quadratic form matrix
         Matrix2D m_quadForm;
         /// Center point of the gaussian filter function
@@ -320,16 +307,16 @@ inline EwaFilterFactory::EwaFilterFactory(const SamplePllgram& samplePllgram,
                                           const Matrix2D& blurVariance,
                                           float logEdgeWeight, 
                                           float maxAspectRatio)
-    : m_quadForm(0),
+    : m_baseResS(baseResS),
+    m_baseResT(baseResT),
+    m_quadForm(0),
     m_filterCenter(samplePllgram.c),
     m_logEdgeWeight(logEdgeWeight),
     m_minorAxisWidth(0)
 {
-    // Scale the filterCenter up to the dimensions of the base texture, and
-    // adjust by -0.5 in both directions such that the base texture is
-    // *centered* on the unit square.
-    m_filterCenter.x = m_filterCenter.x*baseResS - 0.5;
-    m_filterCenter.y = m_filterCenter.y*baseResT - 0.5;
+    // Scale the filterCenter up to the dimensions of the base texture.
+    m_filterCenter.x = m_filterCenter.x*baseResS;
+    m_filterCenter.y = m_filterCenter.y*baseResT;
     // compute and cache the filter
     computeFilter(samplePllgram, baseResS, baseResT, blurVariance, maxAspectRatio);
 }
@@ -350,32 +337,36 @@ inline Matrix2D ewaBlurMatrix(float sBlur, float tBlur)
         return Matrix2D(0);
 }
 
-inline EwaFilter EwaFilterFactory::createFilter(float xScale, float xOff,
-                                                float yScale, float yOff) const
+inline EwaFilter EwaFilterFactory::createFilter(int width, int height) const
 {
     // Displacement from filter center to edge of filter support on minor axis.
     Imath::V2f offset = 0.5f*m_minorAxisWidth*m_minorAxis;
-    // Special case for the first mipmap level.
-    if(xScale == 1 && yScale == 1 && xOff == 0 && yOff == 0)
-        return EwaFilter(m_quadForm, m_filterCenter, m_logEdgeWeight,
-                         m_minorAxis, offset);
-    // Generic case - need to do some scaling etc.
-    float invXs = 1/xScale;
-    float invYs = 1/yScale;
-    // The strange-looking matrix which is passed into the EwaFilter
+    if (width == m_baseResS && height == m_baseResT) {
+        // Special case for base level.  Yep, this actually can have a minor
+        // but measurable impact on speed in some cases (3% say).
+        return EwaFilter(m_quadForm, m_filterCenter - Imath::V2f(0.5f),
+                         m_logEdgeWeight, m_minorAxis, offset);
+    }
+    // Transform the filter coefficients that are relevant to the base
+    // texture into filter coeffs for the miplevel.
+    Imath::V2f scale = Imath::V2f(float(width) / m_baseResS,
+                                  float(height) / m_baseResT);
+    Imath::V2f isc = Imath::V2f(1.0f)/scale;
+    // Compute new filter center.  Note well that we define the center of the
+    // first pixel as occuring a distance of 0.5 pixels from the NDC origin,
+    // hence the offset of -0.5.
+    Imath::V2f newCenter = scale*m_filterCenter - Imath::V2f(0.5f);
+    // The strange-looking matrix that is passed into the EwaFilter
     // constructor below is simply the hand-written version of the following M:
     //
-    // Matrix2D S(1/xScale, 1/yScale);
+    // Matrix2D S(1/isc.x, 1/isc.y);
     // M = scaleMatrix*m_quadForm*scaleMatrix;
     //
     // Note that axes of the ellipse transform like normals.
     return EwaFilter(
-            Matrix2D(invXs*invXs*m_quadForm.a, invXs*invYs*m_quadForm.b,
-                     invXs*invYs*m_quadForm.c, invYs*invYs*m_quadForm.d),
-            Imath::V2f(xScale*(m_filterCenter.x + xOff),
-                       yScale*(m_filterCenter.y + yOff)),
-            m_logEdgeWeight, m_minorAxis*Imath::V2f(invXs, invYs),
-            offset*Imath::V2f(xScale, yScale)
+        Matrix2D(isc.x*isc.x*m_quadForm.a, isc.x*isc.y*m_quadForm.b,
+                 isc.x*isc.y*m_quadForm.c, isc.y*isc.y*m_quadForm.d),
+        newCenter, m_logEdgeWeight, m_minorAxis*isc, offset*scale
     );
 }
 
