@@ -37,13 +37,13 @@
 #include <vector>
 #include <cmath>
 
-#include <ImathFun.h>
+#include <OpenEXR/ImathFun.h>
+#include <OpenEXR/ImathVec.h>
 
 #include "dassert.h"
 
 #include "filtersupport.h"
 #include "matrix2d.h"
-#include "samplequad.h"
 
 OIIO_NAMESPACE_ENTER
 {
@@ -220,11 +220,12 @@ class EwaFilterFactory
         /// filter can be adjusted for other lower resolutions using the
         /// function adjustTextureScale().
         ///
-        /// \param samplePllgram - sample parallelogram representing an
+        /// \param st - texture coordinates
+        /// \param dstdx,dstdy - derivatives of texture coordinates:
         ///            approximate preimage of an output pixel box under the
-        ///            image warp.  The sides of the parallelogram give the
-        ///            linear approximation to the image warp at the centre
-        ///            (that is, they represent the Jacobian of the mapping).
+        ///            image warp.  dstdx and dstdy give the linear
+        ///            approximation to the image warp at the centre (that is,
+        ///            they represent the Jacobian of the mapping).
         /// \param baseResS - width of the base texture (used to determine a
         ///            minimum reconstruction filter variance)
         /// \param baseResT - height of the base texture (used to determine a
@@ -237,7 +238,8 @@ class EwaFilterFactory
         /// \param maxAspectRatio - maximum anisotropy at which the filter will
         ///            be clamped.
         ///
-        EwaFilterFactory(const SamplePllgram& samplePllgram,
+        EwaFilterFactory(const Imath::V2f& st,
+                         const Imath::V2f& dstdx, const Imath::V2f& dstdy,
                          float baseResS, float baseResT,
                          const Matrix2D& blurVariance,
                          float logEdgeWeight = 3, 
@@ -267,9 +269,9 @@ class EwaFilterFactory
         /// EwaFilterFactory constructor.
         ///
         ///
-        void computeFilter(const SamplePllgram& samplePllgram, float baseResS,
-                           float baseResT, const Matrix2D& blurVariance,
-                           float maxAspectRatio);
+        void computeFilter(const Imath::V2f& dstdx, const Imath::V2f& dstdy,
+                           float baseResS, float baseResT,
+                           const Matrix2D& blurVariance, float maxAspectRatio);
 
         /// Base resolution of the texture
         int m_baseResS;
@@ -302,7 +304,9 @@ Matrix2D ewaBlurMatrix(float sBlur, float tBlur);
 // Implementation details
 //==============================================================================
 // EwaFilterFactory implementation
-inline EwaFilterFactory::EwaFilterFactory(const SamplePllgram& samplePllgram,
+inline EwaFilterFactory::EwaFilterFactory(const Imath::V2f& st,
+                                          const Imath::V2f& dstdx,
+                                          const Imath::V2f& dstdy,
                                           float baseResS, float baseResT,
                                           const Matrix2D& blurVariance,
                                           float logEdgeWeight, 
@@ -310,7 +314,7 @@ inline EwaFilterFactory::EwaFilterFactory(const SamplePllgram& samplePllgram,
     : m_baseResS(baseResS),
     m_baseResT(baseResT),
     m_quadForm(0),
-    m_filterCenter(samplePllgram.c),
+    m_filterCenter(st),
     m_logEdgeWeight(logEdgeWeight),
     m_minorAxisWidth(0)
 {
@@ -318,7 +322,8 @@ inline EwaFilterFactory::EwaFilterFactory(const SamplePllgram& samplePllgram,
     m_filterCenter.x = m_filterCenter.x*baseResS;
     m_filterCenter.y = m_filterCenter.y*baseResT;
     // compute and cache the filter
-    computeFilter(samplePllgram, baseResS, baseResT, blurVariance, maxAspectRatio);
+    computeFilter(dstdx, dstdy, baseResS, baseResT, blurVariance,
+                  maxAspectRatio);
 }
 
 inline Matrix2D ewaBlurMatrix(float sBlur, float tBlur)

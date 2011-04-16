@@ -1391,18 +1391,19 @@ TextureSystemImpl::texture_lookup_ewa (TextureFile &texturefile,
     const ImageCacheFile::SubimageInfo &subinfo (texturefile.subimageinfo(options.subimage));
     const ImageSpec& spec = subinfo.spec(0);
 
-    SamplePllgram region (Imath::V2f (s,t),
-                          Imath::V2f (dsdx, dtdx),
-                          Imath::V2f (dsdy, dtdy));
-    region.scaleWidth (options.swidth, options.twidth);
+    Imath::V2f st(s,t);
+    // Scale for extra filter width
+    Imath::V2f widthscale(options.swidth, options.twidth);
+    Imath::V2f dstdx = widthscale * Imath::V2f(dsdx, dtdx);
+    Imath::V2f dstdy = widthscale * Imath::V2f(dsdy, dtdy);
 
     float sblur = options.sblur;
     float tblur = options.tblur;
     // Create filter factory which is capable of making EWA filters
     // corresponding to various mipmap levels.
-    EwaFilterFactory filterFactory (region, spec.width, spec.height,
-                                    ewaBlurMatrix (sblur, tblur),
-                                    3, options.anisotropic);
+    EwaFilterFactory filterFactory (st, dstdx, dstdy, spec.width, spec.height,
+                                    ewaBlurMatrix (sblur, tblur), 3,
+                                    options.anisotropic);
 
     // Select mipmap level to use.
     //

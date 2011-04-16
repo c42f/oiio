@@ -95,16 +95,15 @@ NegExpTable negExpTable(20, 6);
 
 } // namespace detail
 
-void EwaFilterFactory::computeFilter(const SamplePllgram& samplePllgram,
+void EwaFilterFactory::computeFilter(
+        const Imath::V2f& dstdx, const Imath::V2f& dstdy,
         float baseResS, float baseResT, const Matrix2D& blurVariance,
         float maxAspectRatio)
 {
     // Get Jacobian of the inverse texture warp, and scale it by the resolution
     // of the base texture.
-    Matrix2D invJ = Matrix2D(
-                samplePllgram.s1.x, samplePllgram.s2.x,
-                samplePllgram.s1.y, samplePllgram.s2.y
-            );
+    Matrix2D invJ = Matrix2D (dstdx.x, dstdy.x,
+                              dstdx.y, dstdy.y);
 
     // Reconstruction filter variance (conceptually the filter which
     // reconstructs a continuous image from the underlying discrete samples)
