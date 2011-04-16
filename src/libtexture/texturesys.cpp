@@ -1321,17 +1321,9 @@ bool TextureSystemImpl::filter_level_ewa (TextureFile &texturefile,
     const ImageSpec& spec = subinfo.spec(miplevel);
 
     FilterSupport support = filter.support();
-    if(miplevel == (int)subinfo.levels.size() - 1) {
-        if (   (options.swrap == TextureOpt::WrapBlack)
-            || (options.twrap == TextureOpt::WrapBlack) ) {
-            // Truncate the support to a maximum size of 20x20 if we're on the
-            // highest mipmap level.  If we don't do this, the support can
-            // occasionally be very large, resulting in very long filter times.
-            int cx = (support.sx.start + support.sx.end)/2;
-            int cy = (support.sy.start + support.sy.end)/2;
-            support = intersect(support, FilterSupport(cx-10, cx+11,
-                                                       cy-10, cy+11));
-        } else {
+    if (spec.width == 1 && spec.height == 1) { // FIXME CJF: full_width ??
+        if (   (options.swrap != TextureOpt::WrapBlack)
+            && (options.twrap != TextureOpt::WrapBlack) ) {
             // For periodic & clamp wrapmodes, we need no filtering on the
             // highest miplevel, so just extract the pixel value.
             TileID id (texturefile, options.subimage, miplevel, 0, 0, 0);
@@ -1341,11 +1333,28 @@ bool TextureSystemImpl::filter_level_ewa (TextureFile &texturefile,
                 const T* data = reinterpret_cast<const T*> (
                                 thread_info->tile->bytedata())
                                 + options.firstchannel;;
-                wtot = std::numeric_limits<T>::max();
+                wtot = std::numeric_limits<T>::is_integer ?
+                       std::numeric_limits<T>::max() : 1.0f;
                 for (int c = 0; c < options.actualchannels; ++c)
                     result[c] = data[c];
                 return true;
             }
+        }
+    }
+    if (miplevel == (int)subinfo.levels.size() - 1) {
+        int maxw = 4*spec.width;
+        int maxh = 4*spec.height;
+        if (support.sx.range() > maxw || support.sy.range() > maxh) {
+            // Hack: truncate the support to a maximum size of 4x the size of
+            // the smallest mipmap level.  If we don't do this, the support can
+            // occasionally be insanely large and lead to absurd filter times.
+            //
+            // TODO: Could do with a better heuristic really.  For nonmipped
+            // images this doesn't prevent disaster...
+            int newx = (support.sx.start + support.sx.end)/2 - maxw/2;
+            int newy = (support.sy.start + support.sy.end)/2 - maxh/2;
+            support = intersect (support, FilterSupport (newx, newx + maxw,
+                                                         newy, newy + maxh));
         }
     }
 
