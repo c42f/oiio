@@ -1422,9 +1422,22 @@ TextureSystemImpl::texture_lookup_ewa (TextureFile &texturefile,
         minFilterWidth += 2*blurRatio;
     }
 #endif
-    float levelCts = log2 (filterFactory.minorAxisWidth() / minFilterWidth);
-    int miplevel = Imath::clamp (Imath::floor(levelCts), 0,
-                                 (int)subinfo.levels.size() - 1);
+
+    // Select miplevel.
+    int nmiplevels = (int)subinfo.levels.size();
+    float minorwidth_NDC = filterFactory.minorAxisWidth() / spec.width;
+    int miplevel = 0;
+    while (miplevel < nmiplevels) {
+        // Filter size in raster space at this MIP level.
+        float filtwidth_ras = minorwidth_NDC * subinfo.spec(miplevel).width;
+        // Once the filter width is smaller than the minimum allowed we've
+        // gone too far, so we know that we want to use the previous level as
+        // the primary one, and possibly interpolate with the current level.
+        if (filtwidth_ras < minFilterWidth)
+            break;
+        ++miplevel;
+    }
+    miplevel = std::max (0, miplevel-1);
 
     // FIXME: Figure out how to handle cropping/overscan!
 
