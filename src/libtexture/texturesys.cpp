@@ -1157,6 +1157,23 @@ TextureSystemImpl::texture_lookup (TextureFile &texturefile,
 
 
 
+/// Convert channel data of some type into float data.
+///
+/// Note that in principle this works for channel types other than float and
+/// uchar, but the table lookup optimization won't work well for wider int
+/// types like uint16.  If we're ever tempted to store more types in
+/// ImageCache, there's a more efficient way to set things up to achieve the
+/// same thing.
+inline float ewa_channel_to_float (float c)
+{
+    return c;
+}
+inline float ewa_channel_to_float (unsigned char c)
+{
+    return uchar2float(c);
+}
+
+
 template<typename T, typename FilterT>
 bool TextureSystemImpl::filter_level_ewa_nowrap (TextureFile &texturefile,
                                                  PerThreadInfo *thread_info,
@@ -1214,7 +1231,7 @@ bool TextureSystemImpl::filter_level_ewa_nowrap (TextureFile &texturefile,
                     if (w != 0) {
                         wtot += w;
                         for (int c = 0; c < options.actualchannels; ++c)
-                            result[c] += w*d[c];
+                            result[c] += w*ewa_channel_to_float (d[c]);
                     }
                     d += nchannels;
                 }
@@ -1386,10 +1403,9 @@ bool TextureSystemImpl::filter_level_ewa (TextureFile &texturefile,
                 const T* data = reinterpret_cast<const T*> (
                                 thread_info->tile->bytedata())
                                 + options.firstchannel;
-                wtot = std::numeric_limits<T>::is_integer ?
-                       std::numeric_limits<T>::max() : 1.0f;
+                wtot = 1.0f;
                 for (int c = 0; c < options.actualchannels; ++c)
-                    result[c] = data[c];
+                    result[c] = ewa_channel_to_float (data[c]);
                 return true;
             }
         }
@@ -1426,8 +1442,6 @@ bool TextureSystemImpl::filter_level_ewa (TextureFile &texturefile,
         }
     }
 
-    if (std::numeric_limits<T>::is_integer)
-        wtot *= std::numeric_limits<T>::max();
     return true; //FIXME
 }
 
