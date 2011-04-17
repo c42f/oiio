@@ -64,6 +64,8 @@ static int iters = 1;
 static int autotile = 0;
 static bool automip = false;
 static std::string mipmode = "Aniso";
+static std::string swrap = "periodic";
+static std::string twrap = "periodic";
 static bool test_construction = false;
 static TextureSystem *texsys = NULL;
 static std::string searchpath;
@@ -106,6 +108,17 @@ static TextureOpt::MipMode parse_mipmode (const std::string& modestring)
     return TextureOpt::MipModeDefault;
 }
 
+static TextureOpt::Wrap parse_wrapmode (const std::string& wrapstring)
+{
+    if (wrapstring == "black")      return TextureOpt::WrapBlack;
+    if (wrapstring == "clamp")      return TextureOpt::WrapClamp;
+    if (wrapstring == "periodic")   return TextureOpt::WrapPeriodic;
+    if (wrapstring == "mirror")     return TextureOpt::WrapMirror;
+
+    std::cerr << "testtex: Unkown wrap mode \"" << wrapstring
+              << "\", using default\n";
+    return TextureOpt::WrapDefault;
+}
 
 
 static void
@@ -131,6 +144,8 @@ getargs (int argc, const char *argv[])
                   "--autotile %d", &autotile, "Set auto-tile size for the image cache",
                   "--automip", &automip, "Set auto-MIPmap for the image cache",
                   "--mipmode %s", &mipmode, "Specify the filtering mode to use",
+                  "--swrap %s", &swrap, "Specify the wrap mode in the s direction",
+                  "--twrap %s", &twrap, "Specify the wrap mode in the t direction",
                   "--blocksize %d", &blocksize, "Set blocksize (n x n) for batches",
                   "--handle", &use_handle, "Use texture handle rather than name lookup",
                   "--searchpath %s", &searchpath, "Search path for files",
@@ -252,8 +267,9 @@ test_plain_texture ()
     opt1.fill = (fill >= 0.0f) ? fill : 1.0f;
     if (missing[0] >= 0)
         opt1.missingcolor = (float *)&missing;
-    opt1.mipmode = parse_mipmode(mipmode);
-    opt1.swrap = opt1.twrap = TextureOpt::WrapPeriodic;
+    opt1.mipmode = parse_mipmode (mipmode);
+    opt1.swrap = parse_wrapmode (swrap);
+    opt1.twrap = parse_wrapmode (twrap);
 
     TextureOptions opt(opt1);
 
