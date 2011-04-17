@@ -1157,12 +1157,12 @@ TextureSystemImpl::texture_lookup (TextureFile &texturefile,
 
 
 
-template<typename T>
+template<typename T, typename FilterT>
 bool TextureSystemImpl::filter_level_ewa_nowrap (TextureFile &texturefile,
                                                  PerThreadInfo *thread_info,
                                                  TextureOpt &options,
                                                  int miplevel,
-                                                 const EwaFilter& filter,
+                                                 const FilterT& filter,
                                                  const FilterSupport& support,
                                                  float& wtot, float *result)
 {
@@ -1205,9 +1205,9 @@ bool TextureSystemImpl::filter_level_ewa_nowrap (TextureFile &texturefile,
             // Iterate over relevant portion of the current tile
             for (int y = yb; y < ye; ++y) {
                 const T* d = data;
-                // Intersect x-bounding slab with tile x range.
-                int xb2 = std::max (xb, filter.xbegin(y));
-                int xe2 = std::min (xe, filter.xend(y));
+                int xb2 = xb, xe2 = xe;
+                // Further clip x support at current y if possible.
+                filter.clipXSupport (y, xb2, xe2);
                 d += nchannels*(xb2 - xb);
                 for (int x = xb2; x < xe2; ++x) {
                     float w = filter(x,y);
@@ -1226,6 +1226,61 @@ bool TextureSystemImpl::filter_level_ewa_nowrap (TextureFile &texturefile,
     return true; // FIXME
 }
 
+
+
+/// Modified filter for the border of a texture with wrap = WrapClamp
+///
+/// This filter is designed to be used along a one-pixel border of the image -
+/// it integrates the underlying filter coefficients perpendicularly to the
+/// border, out into the clamped region.
+class ClampBorderFilter
+{
+    public:
+        ClampBorderFilter(const EwaFilter& baseFilter,
+                          const FilterSupport& support,
+                          bool xclamped, bool yclamped)
+            : m_baseFilter(baseFilter),
+            m_support(support),
+            m_xclamped(xclamped),
+            m_yclamped(yclamped)
+        {
+            DASSERT(xclamped || yclamped);
+        }
+
+        float operator()(int x, int y) const
+        {
+            float weight = 0;
+            if (m_xclamped && m_yclamped) {
+                // Both wrapped: Add up filter coefficients in both
+                // directions.
+                for (int j = m_support.sy.start; j < m_support.sy.end; ++j)
+                for (int i = m_support.sx.start; i < m_support.sx.end; ++i)
+                    weight += m_baseFilter(i, j);
+            }
+            else if (m_xclamped) {
+                // Add up filter coefficients along x direction
+                for (int i = m_support.sx.start; i < m_support.sx.end; ++i)
+                    weight += m_baseFilter(i, y);
+            }
+            else {
+                // Add up filter coefficients along y direction
+                for (int j = m_support.sy.start; j < m_support.sy.end; ++j)
+                    weight += m_baseFilter(x, j);
+            }
+            return weight;
+        }
+
+        void clipXSupport(int y, int& xbegin, int& xend) const { }
+
+    private:
+        const EwaFilter& m_baseFilter;
+        FilterSupport m_support;
+        bool m_xclamped;
+        bool m_yclamped;
+};
+
+
+
 template<typename T>
 bool TextureSystemImpl::filter_level_ewa_wrap (
                   TextureFile &texturefile, PerThreadInfo *thread_info,
@@ -1235,78 +1290,76 @@ bool TextureSystemImpl::filter_level_ewa_wrap (
 {
     const ImageCacheFile::SubimageInfo &subinfo (texturefile.subimageinfo(options.subimage));
     const ImageSpec& spec = subinfo.spec(miplevel);
-    bool wrapX = tlX != 0;
-    bool wrapY = tlY != 0;
+    // FIXME: WrapMirror support?
+    DASSERT (options.swrap != TextureOpt::WrapMirror &&
+             options.twrap != TextureOpt::WrapMirror);
+    bool xwrapped = tlX != 0;
+    bool ywrapped = tlY != 0;
     // Construct the support of the current buffer tile.
     FilterSupport currSupp = intersect(support, FilterSupport(
                 tlX, tlX + spec.width, tlY, tlY + spec.height));
     // Select one of the possible wrap modes / wrapping combinations.
-    if (   (options.swrap == TextureOpt::WrapBlack && wrapX)
-        || (options.twrap == TextureOpt::WrapBlack && wrapY) )
-    {
+    if (   (options.swrap == TextureOpt::WrapBlack && xwrapped)
+        || (options.twrap == TextureOpt::WrapBlack && ywrapped) ) {
         // If the tile is in a black wrapmode region, accumulate black
         // samples, which really amounts to incrementing the total weight.
         for (int y = currSupp.sy.start; y < currSupp.sy.end; ++y)
             for (int x = currSupp.sx.start; x < currSupp.sx.end; ++x)
                 wtot += filter(x,y);
+        return true;
     }
-#if 0
-    else if(wrapModes.sWrap == WrapMode_Clamp && wrapX)
-    {
-        if(wrapModes.tWrap == WrapMode_Clamp && wrapY)
-        {
-            // Both directions are clamped.  This requires accumulation of
-            // a single corner pixel over the support.
-            int xClamp = clamp(tlX, 0, spec.width-1);
-            int yClamp = clamp(tlY, 0, spec.height-1);
-            // sampVec is the samples for the corner pixel to be accumulated.
-            typename ArrayT::TqSampleVector sampVec = *buffer.begin(FilterSupport(
-                        xClamp, xClamp+1, yClamp, yClamp+1));
-            for(int ix = currSupp.sx.start; ix < currSupp.sx.end; ++ix)
-                for(int iy = currSupp.sy.start; iy < currSupp.sy.end; ++iy)
-                    sampleAccum.accumulate(ix, iy, sampVec);
-        }
-        else
-        {
-            // clamped in x direction, but not in y direction.
-            // Here we perform a normal iteration over y, but leave 
-            int xClamp = clamp(tlX, 0, spec.width-1);
-            FilterSupport clampedSupport(FilterSupport1D(xClamp, xClamp+1), currSupp.sy);
-            for(typename ArrayT::TqIterator i = buffer.begin(clampedSupport);
-                    i.inSupport(); ++i)
-            {
-                for(int ix = currSupp.sx.start; ix < currSupp.sx.end; ++ix)
-                    sampleAccum.accumulate(ix, i.y(), *i);
-            }
-        }
+    // If we get here, we've got some combination of clamped and periodic
+    // wrapping.
+    //
+    // For clamped wrapping, we collapse the filter support onto a one-pixel
+    // border of the image, with filter coefficients equal to the original
+    // filter integrated perpendicular to the boundary.  This means we only
+    // touch the border texels once for the clamped support area in this
+    // function.
+    //
+    // For periodic wrapping, we translate the filter (and corresponding
+    // filter support) into the primary raster coordinate system.
+    bool xclamped = options.swrap == TextureOpt::WrapClamp && xwrapped;
+    bool yclamped = options.twrap == TextureOpt::WrapClamp && ywrapped;
+    FilterSupport1D sx = currSupp.sx;
+    FilterSupport1D sy = currSupp.sy;
+    Imath::V2f filterTrans(0);
+    // Get filter translation amount or clamp the support in x direction
+    if (options.swrap == TextureOpt::WrapPeriodic) {
+        // periodically translate filter & support
+        sx.translate(-tlX);
+        filterTrans.x = -tlX;
+    } else if (xclamped) {
+        // or clamp the support onto a one pixel boundary
+        sx.start = clamp(tlX, 0, spec.width-1);
+        sx.end = sx.start + 1;
     }
-    else if(wrapModes.tWrap == WrapMode_Clamp && wrapY)
-    {
-        // clamped in y direction, but not in x direction.  This is just an
-        // inverted (and slightly duplicated :-/ ) version of the code above
-        int yClamp = clamp(tlY, 0, spec.height-1);
-        FilterSupport clampedSupport(currSupp.sx, FilterSupport1D(yClamp, yClamp+1));
-        for(typename ArrayT::TqIterator i = buffer.begin(clampedSupport);
-                i.inSupport(); ++i)
-        {
-            for(int iy = currSupp.sy.start; iy < currSupp.sy.end; ++iy)
-                sampleAccum.accumulate(i.x(), iy, *i);
-        }
+    // Same in y direction
+    if (options.twrap == TextureOpt::WrapPeriodic) {
+        sy.translate(-tlY);
+        filterTrans.y = -tlY;
+    } else if (yclamped) {
+        sy.start = clamp(tlY, 0, spec.height-1);
+        sy.end = sy.start + 1;
     }
-#endif
-    else
-    {
-        // Either no wrapping or periodic wrapping in one direction.
-        FilterSupport wrappedSupport(
-                currSupp.sx.start - tlX, currSupp.sx.end - tlX,
-                currSupp.sy.start - tlY, currSupp.sy.end - tlY);
-        EwaFilter wrapFilt(filter);
-        wrapFilt.translate (-Imath::V2f (tlX, tlY));
-        filter_level_ewa_nowrap<T> (texturefile, thread_info, options,
-                                    miplevel, wrapFilt, wrappedSupport,
-                                    wtot, result);
+    EwaFilter newFilter = filter;
+    newFilter.translate (filterTrans);
+    FilterSupport newSupport(sx, sy);
+    bool ok = true;
+    if (xclamped || yclamped) {
+        // Run integrated filter along clamped one-pixel border of the image.
+        ClampBorderFilter borderFilter (newFilter, currSupp,
+                                        xclamped, yclamped);
+        ok = filter_level_ewa_nowrap<T> (texturefile, thread_info, options,
+                                         miplevel, borderFilter, newSupport,
+                                         wtot, result);
+    } else {
+        // Run normal filter over periodically remapped image.
+        ok = filter_level_ewa_nowrap<T> (texturefile, thread_info, options,
+                                         miplevel, newFilter, newSupport,
+                                         wtot, result);
     }
-    return true; //FIXME
+    return ok;
 }
 
 
@@ -1332,7 +1385,7 @@ bool TextureSystemImpl::filter_level_ewa (TextureFile &texturefile,
             } else {
                 const T* data = reinterpret_cast<const T*> (
                                 thread_info->tile->bytedata())
-                                + options.firstchannel;;
+                                + options.firstchannel;
                 wtot = std::numeric_limits<T>::is_integer ?
                        std::numeric_limits<T>::max() : 1.0f;
                 for (int c = 0; c < options.actualchannels; ++c)

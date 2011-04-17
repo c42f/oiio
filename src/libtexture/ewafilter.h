@@ -82,9 +82,6 @@ class EwaFilter
                   float logEdgeWeight, Imath::V2f minorAxis,
                   Imath::V2f boundOffset);
 
-        /// EWA filters are never pre-noramlized; return false.
-        static bool isNormalized() { return false; }
-
         /// \brief Evaluate the filter at the given point in image space.
         ///
         /// \param x
@@ -101,7 +98,7 @@ class EwaFilter
         /// Translate centre of filter in the image plane.
         void translate(Imath::V2f trans);
 
-        /// First x coordinate inside filter at height y.
+        /// Remove zero regions of x support at a particular height y
         ///
         /// Diagonally anisotropic filters don't fit well into an axis-aligned
         /// bounding box as shown here (x's represent nonzero filter values):
@@ -122,15 +119,17 @@ class EwaFilter
         /// support() contains a lot of zeros, so it's inefficient to iterate
         /// over this entire region.  Instead, we can define a bounding slab
         /// by a pair of parallel lines, and iterate between those instead.
-        /// xbegin() and xend() calculate these lines at a given height y.
-        int xbegin(float y) const
+        /// clipXSupport removes any parts of a given support outside the slab.
+        ///
+        /// \param y - scanline
+        /// \param xbegin - start of support in x direction
+        /// \param xend - one-past-end of support in x direction
+        void clipXSupport(int y, int& xbegin, int& xend) const
         {
-            return Imath::ceil(m_leftBound_x0 + m_bound_dxdy*y);
-        }
-        /// One-past-last x coordinate inside filter at height y.
-        int xend(float y) const
-        {
-            return Imath::ceil(m_rightBound_x0 + m_bound_dxdy*y);
+            xbegin = std::max (Imath::ceil(m_leftBound_x0 + m_bound_dxdy*y),
+                               xbegin);
+            xend = std::min (Imath::ceil(m_rightBound_x0 + m_bound_dxdy*y),
+                             xend);
         }
 
     private:

@@ -72,6 +72,9 @@ struct FilterSupport1D
     bool intersectsRange(int rangeStart, int rangeEnd) const;
     /// Return true if the support is wholly inside the given range.
     bool inRange(int rangeStart, int rangeEnd) const;
+
+    /// Translate range by t
+    void translate(int t) { start += t; end += t; }
 };
 
 /// Return the intersection of two support regions.

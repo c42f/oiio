@@ -334,11 +334,11 @@ private:
                          float _dsdy, float _dtdy,
                          float *result);
 
-    template<typename T>
+    template<typename T, typename FilterT>
     bool filter_level_ewa_nowrap (TextureFile &texturefile,
                                   PerThreadInfo *thread_info,
                                   TextureOpt &options, int miplevel,
-                                  const EwaFilter& filter,
+                                  const FilterT& filter,
                                   const FilterSupport& support,
                                   float& wtot, float *result);
 
